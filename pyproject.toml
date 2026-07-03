@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=64", "pybind11>=2.12"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "quoridor-engine"
+version = "0.1.0"
+description = "Reinforcement learning engine for the board game Quoridor"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy>=2.4.6",
+    "pybind11>=3.0.4",
+    "torch>=2.12.1",
+]
+
+[tool.setuptools.packages]
+find = { exclude = ["cpp", "core", "search", "nn", "data", "models"] }
