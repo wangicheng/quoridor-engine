@@ -7,45 +7,6 @@
 
 namespace py = pybind11;
 
-// Helper: wrap EvalCallback from a Python function
-static EvalCallback make_eval_callback(py::function py_fn) {
-    return [py_fn](const float* state, const bool* mask,
-                   float p1_dist, float p2_dist, int turn,
-                   float* probs_out, float& value_out) {
-        // Copy data into owned numpy arrays (safe for Python side)
-        py::array_t<float> state_arr({STATE_CHANNELS, STATE_SPATIAL, STATE_SPATIAL});
-        auto s_buf = state_arr.mutable_unchecked<3>();
-        int idx = 0;
-        for (int ch = 0; ch < STATE_CHANNELS; ch++) {
-            for (int r = 0; r < STATE_SPATIAL; r++) {
-                for (int c = 0; c < STATE_SPATIAL; c++) {
-                    s_buf(ch, r, c) = state[idx++];
-                }
-            }
-        }
-
-        py::array_t<bool> mask_arr(NUM_ACTIONS);
-        auto m_buf = mask_arr.mutable_unchecked<1>();
-        for (int i = 0; i < NUM_ACTIONS; i++) {
-            m_buf(i) = mask[i];
-        }
-
-        // Call Python function
-        py::object result = py_fn(state_arr, mask_arr, p1_dist, p2_dist, turn);
-
-        // Extract results - expects (probs_array, value_scalar)
-        auto result_tuple = result.cast<py::tuple>();
-        py::array_t<float> probs_arr = result_tuple[0].cast<py::array_t<float>>();
-        value_out = result_tuple[1].cast<float>();
-
-        // Copy probs to output buffer
-        auto probs_buf = probs_arr.unchecked<1>();
-        for (int i = 0; i < NUM_ACTIONS; i++) {
-            probs_out[i] = probs_buf(i);
-        }
-    };
-}
-
 PYBIND11_MODULE(quoridor_core, m) {
     m.doc() = "C++ Quoridor engine with MCGS search";
 
@@ -127,17 +88,59 @@ PYBIND11_MODULE(quoridor_core, m) {
 
     // ---------- MCGS ----------
     py::class_<MCGS>(m, "MCGS")
-        .def(py::init([](py::function eval_fn, float c_puct, float fpu_reduction) {
-            return std::make_unique<MCGS>(make_eval_callback(eval_fn), c_puct, fpu_reduction);
-        }), py::arg("eval_fn"), py::arg("c_puct") = 1.5f, py::arg("fpu_reduction") = 0.01f)
+        .def(py::init([](float c_puct, float fpu_reduction) {
+            return std::make_unique<MCGS>(c_puct, fpu_reduction);
+        }), py::arg("c_puct") = 1.5f, py::arg("fpu_reduction") = 0.01f)
 
-        .def("search", [](MCGS& self, QuoridorBoard& board, int num_simulations) {
-            auto visits = self.search(board, num_simulations);
+        .def("reset_search", &MCGS::reset_search, py::arg("board"))
+
+        .def("search_step", [](MCGS& self, QuoridorBoard& board) -> py::tuple {
+            float state[STATE_CHANNELS * STATE_SPATIAL * STATE_SPATIAL];
+            bool mask[NUM_ACTIONS];
+            int leaf_turn;
+            
+            bool needs_eval = self.search_step(board, state, mask, leaf_turn);
+
+            if (!needs_eval) {
+                return py::make_tuple(false, py::none(), py::none(), py::none());
+            }
+
+            py::array_t<float> state_arr({STATE_CHANNELS, STATE_SPATIAL, STATE_SPATIAL});
+            auto s_buf = state_arr.mutable_unchecked<3>();
+            int idx = 0;
+            for (int ch = 0; ch < STATE_CHANNELS; ch++) {
+                for (int r = 0; r < STATE_SPATIAL; r++) {
+                    for (int c = 0; c < STATE_SPATIAL; c++) {
+                        s_buf(ch, r, c) = state[idx++];
+                    }
+                }
+            }
+
+            py::array_t<bool> mask_arr(NUM_ACTIONS);
+            auto m_buf = mask_arr.mutable_unchecked<1>();
+            for (int i = 0; i < NUM_ACTIONS; i++) {
+                m_buf(i) = mask[i];
+            }
+
+            return py::make_tuple(true, state_arr, mask_arr, leaf_turn);
+        }, py::arg("board"))
+
+        .def("expand_and_backup", [](MCGS& self, float nn_value, py::array_t<float> probs_arr) {
+            auto buf = probs_arr.unchecked<1>();
+            float probs[NUM_ACTIONS];
+            for (int i = 0; i < NUM_ACTIONS; i++) {
+                probs[i] = buf(i);
+            }
+            self.expand_and_backup(nn_value, probs);
+        })
+
+        .def("get_action_visits", [](MCGS& self) {
+            auto visits = self.get_action_visits();
             py::array_t<float> arr(NUM_ACTIONS);
             auto buf = arr.mutable_unchecked<1>();
             for (int i = 0; i < NUM_ACTIONS; i++) {
                 buf(i) = visits[i];
             }
             return arr;
-        }, py::arg("board"), py::arg("num_simulations") = 100);
+        });
 }
