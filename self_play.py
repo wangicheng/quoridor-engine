@@ -183,8 +183,13 @@ def main():
         active_envs.append(start_new_game())
 
     start_time = time.time()
+    batch_step_count = 0
 
     while active_envs:
+        if batch_step_count % 50 == 0:
+            print(f"  [Progress] Active games: {len(active_envs):2d} | Batch MCTS steps: {batch_step_count:4d} | Completed: {total_games_completed}/{remaining_games}")
+        batch_step_count += 1
+
         states = []
         masks = []
         models_to_eval = []
